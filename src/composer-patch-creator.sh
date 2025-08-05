@@ -237,7 +237,7 @@ create_vendor_patch() {
 
     # Create patch
     log_message "${COLOR_GREEN}" "Creating patch file: ${patch_name}..."
-    git diff -b "./vendor/$vendor_package/" > "${patch_path}"
+    git diff "./vendor/$vendor_package/" > "${patch_path}"
     echo -e "✔ Done!"
 
     log_message "${COLOR_GREEN}" "Restoring/Un-staging the modified files..."
