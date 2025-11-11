@@ -82,7 +82,7 @@ check_dependencies() {
 # Help function
 show_help() {
     echo
-    echo "Vendor Patch Creation Utility Script (v1.0.0)"
+    echo "Vendor Patch Creation Utility Script (v2.0.0)"
     echo
     echo "📋 Usage: $0 <vendor/package> [options]"
     echo
@@ -92,13 +92,24 @@ show_help() {
     echo "  -m, --message <message>     Specify a patch description message"
     echo
     echo "📝 Description:"
-    echo "  → Create a patch file for the entire vendor package by identifying modified files."
+    echo "  → Create a patch file for packages by identifying modified files."
+    echo "  → Supports custom installer paths (e.g., Drupal projects)."
+    echo "  → Automatically detects package location from composer.json installer-paths."
     echo "  → Add an entry for the patches in composer.json."
     echo "  → Patches should be applied via composer plugin: cweagans/composer-patches."
     echo
     echo "📂 Examples:"
     echo "  $0 magento/module-url-rewrite"
-    echo "  $0 magento/module-url-rewrite -n TICKET-magento-module-url-rewrite-fix.patch -m \"TICKET: Fixed URL rewrite bug\""
+    echo "  $0 drupal/webform -n fix-validation.patch -m \"Fixed webform validation\""
+    echo "  $0 bower-asset/photoswipe -n photoswipe-fix.patch"
+    echo
+    echo "🎯 Supported Paths:"
+    echo "  → Standard vendor directory (vendor/vendor-name/package-name)"
+    echo "  → Drupal modules (web/modules/contrib, web/modules/custom)"
+    echo "  → Drupal themes (web/themes/contrib, web/themes/custom)"
+    echo "  → Drupal libraries (web/libraries)"
+    echo "  → Drush commands (drush/Commands/contrib)"
+    echo "  → Any custom paths defined in composer.json extra.installer-paths"
     echo
     echo "💡 Pro Tip: Always review patches before applying to vendor code!"
     echo
@@ -112,6 +123,94 @@ error_exit() {
     exit 1
 }
 
+# Get package type from composer.json
+get_package_type() {
+    local vendor_package="$1"
+    local vendor
+    vendor=$(echo "$vendor_package" | cut -d'/' -f1)
+    local package
+    package=$(echo "$vendor_package" | cut -d'/' -f2)
+
+    # Check if package exists in any possible location and determine its type
+    # First, try to find the package's composer.json to get the actual type
+    local possible_paths=(
+        "vendor/${vendor}/${package}"
+        "web/modules/contrib/${package}"
+        "web/modules/custom/${package}"
+        "web/themes/contrib/${package}"
+        "web/themes/custom/${package}"
+        "web/profiles/contrib/${package}"
+        "web/profiles/custom/${package}"
+        "web/libraries/${package}"
+        "web/core"
+        "drush/Commands/contrib/${package}"
+    )
+
+    for path in "${possible_paths[@]}"; do
+        if [[ -f "${path}/composer.json" ]]; then
+            local package_type
+            package_type=$(jq -r '.type // "library"' "${path}/composer.json" 2>/dev/null || echo "library")
+            echo "$package_type"
+            return
+        fi
+    done
+
+    # Fallback: infer type from package name patterns for Drupal
+    local package_type
+    package_type=$(jq -r --arg pkg "$vendor_package" '
+        if .require[$pkg] != null or .["require-dev"][$pkg] != null then
+            # Determine type based on package name patterns
+            if ($pkg | startswith("drupal/core")) then "drupal-core"
+            elif ($pkg | startswith("drupal-library/")) then "drupal-library"
+            elif ($pkg | startswith("bower-asset/")) then "drupal-library"
+            elif ($pkg | startswith("drupal/")) then
+                if ($pkg | contains("theme")) then "drupal-theme"
+                else "drupal-module" end
+            elif ($pkg | startswith("drush/") or $pkg | contains("drush")) then "drupal-drush"
+            else "library" end
+        else
+            "library"
+        end
+    ' "$CONFIG_COMPOSER_FILE" 2>/dev/null || echo "library")
+
+    echo "$package_type"
+}
+
+# Get package installation path from composer.json installer-paths
+get_package_path() {
+    local vendor_package="$1"
+    local package_type="$2"
+    local vendor
+    vendor=$(echo "$vendor_package" | cut -d'/' -f1)
+    local package
+    package=$(echo "$vendor_package" | cut -d'/' -f2)
+
+    # First, check if installer-paths exist in composer.json
+    local has_installer_paths
+    has_installer_paths=$(jq -r '.extra["installer-paths"] // empty | if . then "true" else "false" end' "$CONFIG_COMPOSER_FILE" 2>/dev/null || echo "false")
+
+    if [[ "$has_installer_paths" == "true" ]]; then
+        # Get the path pattern from installer-paths based on package type
+        local path_pattern
+        path_pattern=$(jq -r --arg type "$package_type" '
+            .extra["installer-paths"] // {} |
+            to_entries[] |
+            select(.value[] | contains("type:" + $type)) |
+            .key
+        ' "$CONFIG_COMPOSER_FILE" 2>/dev/null | head -n1)
+
+        # If we found a path pattern, replace the {$name} placeholder
+        if [[ -n "$path_pattern" ]]; then
+            local resolved_path="${path_pattern//\{\$name\}/$package}"
+            echo "$resolved_path"
+            return
+        fi
+    fi
+
+    # Default fallback to standard vendor directory
+    echo "vendor/${vendor}/${package}"
+}
+
 # Validate input
 validate_input() {
     if [[ $# -eq 0 ]]; then
@@ -123,17 +222,26 @@ validate_input() {
     vendor=$(echo "$vendor_package" | cut -d'/' -f1)
     local package
     package=$(echo "$vendor_package" | cut -d'/' -f2)
-    local package_path="./vendor/${vendor}/${package}"
+
+    # Detect package type and get the actual installation path
+    local package_type
+    package_type=$(get_package_type "$vendor_package")
+
+    local package_path
+    package_path=$(get_package_path "$vendor_package" "$package_type")
 
     if [[ ! -d "$package_path" ]]; then
-        error_exit "Vendor package not found: $vendor_package"
+        error_exit "Package not found at: $package_path (type: $package_type)"
     fi
+
+    # Export the package path for use in other functions
+    export RESOLVED_PACKAGE_PATH="$package_path"
 }
 
-# Detect modified files in the specified vendor/package
+# Detect modified files in the specified package path
 get_modified_files() {
-    local vendor_package="$1"
-    git ls-files -m "./vendor/$vendor_package"
+    local package_path="$1"
+    git ls-files -m "$package_path"
 }
 
 # Update composer.json with new patch
@@ -186,16 +294,19 @@ create_vendor_patch() {
     local package
     package=$(echo "$vendor_package" | cut -d'/' -f2)
 
+    # Use the resolved package path from validate_input
+    local package_path="$RESOLVED_PACKAGE_PATH"
+
     # Create patches directory
     mkdir -p "${CONFIG_PATCHES_DIR}"
 
     # Stage files
-    log_message "${COLOR_GREEN}" "Staging package files for patch..."
-    git add -f "./vendor/$vendor_package/"
+    log_message "${COLOR_GREEN}" "Staging package files for patch at: ${package_path}"
+    git add -f "$package_path/"
     echo -e "✔ Done!"
 
     # Notify user
-    log_message "${COLOR_GREEN}" "📝 Modify the required files for package: ${vendor_package}"
+    log_message "${COLOR_GREEN}" "📝 Modify the required files for package: ${vendor_package} at ${package_path}"
 
     # User interaction
     #read -r -p "Once you have finished making the changes, press y to continue or a to abort" changes_complete
@@ -204,7 +315,7 @@ create_vendor_patch() {
 
     # Find files in the package
     local files
-    files=$(get_modified_files "$vendor_package")
+    files=$(get_modified_files "$package_path")
 
     if [[ "$changes_complete" != "y" ]]; then
         log_message "${COLOR_RED}" "Patch creation aborted."
@@ -212,9 +323,9 @@ create_vendor_patch() {
     fi
 
     if [[ -z "$files" ]]; then
-        git restore "./vendor/${vendor_package}/"
-        git reset HEAD "./vendor/${vendor_package}/" > /dev/null 2>&1
-        error_exit "No modified files found in package: $vendor_package"
+        git restore "$package_path/"
+        git reset HEAD "$package_path/" > /dev/null 2>&1
+        error_exit "No modified files found in package: $vendor_package at $package_path"
     else
         log_message "${COLOR_GREEN}" "Modified files:"
         echo "$files"
@@ -237,15 +348,15 @@ create_vendor_patch() {
 
     # Create patch
     log_message "${COLOR_GREEN}" "Creating patch file: ${patch_name}..."
-    git diff "./vendor/$vendor_package/" > "${patch_path}"
+    git diff "$package_path/" > "${patch_path}"
     echo -e "✔ Done!"
 
     log_message "${COLOR_GREEN}" "Restoring/Un-staging the modified files..."
     # restore the changes
-    git restore "./vendor/$vendor_package/"
+    git restore "$package_path/"
 
     # Unstage files
-    git reset HEAD "./vendor/$vendor_package/" > /dev/null 2>&1
+    git reset HEAD "$package_path/" > /dev/null 2>&1
     echo -e "✔ Done!"
 
     # Update composer.json
