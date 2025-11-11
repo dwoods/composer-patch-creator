@@ -2,7 +2,9 @@
 
 ## 🛠 Overview
 
-A robust and lightning-fast Bash utility script designed to simplify and accelerate the process of creating and managing vendor package patches for Composer-based PHP projects (such as Magento, Laravel, Symfony, etc.).
+A robust and lightning-fast Bash utility script designed to simplify and accelerate the process of creating and managing vendor package patches for Composer-based PHP projects (such as Magento, Laravel, Symfony, Drupal, etc.).
+
+**Now with full Drupal support!** Automatically detects and works with custom installer paths for Drupal modules, themes, libraries, and drush commands.
 
 This is likely the quickest and most efficient way to generate Composer-compatible patches for vendor packages, saving developers significant time and effort.
 
@@ -53,6 +55,10 @@ cpc {vendor}/{package} -n {patch-name}.patch -m {patch-message}
 
 ### 🌟 Key Benefits
 - **Simplified Workflow**: Reduce multiple manual steps to a single command
+- **Smart Path Detection**: Automatically detects package location from composer.json
+    - Standard vendor directory
+    - Drupal custom paths (modules, themes, libraries, drush commands)
+    - Any custom installer paths defined in composer.json
 - **Automatic File Management**:
     - Automatically stages files
     - Generates patch
@@ -86,7 +92,7 @@ cpc {vendor}/{package} -n {patch-name}.patch -m {patch-message}
 
 1. Clone the script to your project:
 ```bash
-curl -0 https://raw.githubusercontent.com/MagePsycho/composer-patch-creator/main/src/composer-patch-creator.sh -o cpc.sh
+curl -0 https://raw.githubusercontent.com/dwoods/composer-patch-creator/main/src/composer-patch-creator.sh -o cpc.sh
 chmod +x cpc.sh
 ```
 
@@ -106,14 +112,37 @@ sudo mv cpc.sh /usr/local/bin/cpc
 
 ### Advanced Options
 ```bash
-# Custom patch name
+# Magento module example
 ./cpc.sh magento/module-url-rewrite -n TICKET-custom-patch.patch
 
-# Patch with description
-./cpc.sh magento/module-url-rewrite -m "Fixed critical URL rewrite bug"
+# Drupal module example
+./cpc.sh drupal/webform -n fix-validation.patch -m "Fixed webform validation issue"
 
-# Full example
+# Drupal library example
+./cpc.sh bower-asset/photoswipe -n photoswipe-caption-fix.patch
+
+# Drush command example
+./cpc.sh drush/drush -n drush-command-fix.patch
+
+# Full example with all options
 ./cpc.sh magento/module-url-rewrite -n TICKET-123.patch -m "Resolved routing issue"
+```
+
+### Drupal-Specific Examples
+The script automatically detects Drupal package locations based on your `composer.json`:
+
+```bash
+# Drupal contrib module (installed in web/modules/contrib/)
+./cpc.sh drupal/admin_toolbar
+
+# Drupal contrib theme (installed in web/themes/contrib/)
+./cpc.sh drupal/olivero
+
+# Drupal library (installed in web/libraries/)
+./cpc.sh drupal-library/ckeditor5-anchor-drupal
+
+# Drush commands (installed in drush/Commands/contrib/)
+./cpc.sh drush-ops/behat-drush-endpoint
 ```
 
 ### Options
@@ -138,14 +167,25 @@ For more details, refer to the `Composer Configuration` section.
 ## 🔍 How It Works
 
 1. Checks system dependencies
-2. Validates vendor package existence
-3. Stages vendor package files
-4. Prompts for file modifications
-5. Creates patch file
-6. Updates `composer.json` with patch information
+2. Detects package type from composer.json or package name patterns
+3. Resolves package installation path using composer.json `extra.installer-paths`
+4. Validates package existence at the resolved path
+5. Stages package files using git
+6. Prompts for file modifications
+7. Creates patch file from git diff
+8. Restores and unstages modified files
+9. Updates `composer.json` with patch information
+
+### Path Detection Logic
+The script intelligently detects package locations by:
+1. Reading the package type from the installed package's composer.json
+2. Matching the type against `extra.installer-paths` in the root composer.json
+3. Resolving the path pattern with the actual package name
+4. Falling back to standard `vendor/` directory if no custom path is defined
 
 ## 📝 Composer Configuration
 
+### Standard Projects
 Ensure your `composer.json` has patch plugin configuration:
 
 ```json
@@ -159,6 +199,32 @@ Ensure your `composer.json` has patch plugin configuration:
 }
 ```
 
+### Drupal Projects
+For Drupal projects with custom installer paths, your `composer.json` should include:
+
+```json
+{
+    "require": {
+        "composer/installers": "^2.0",
+        "cweagans/composer-patches": "^1.7"
+    },
+    "extra": {
+        "installer-paths": {
+            "web/core": ["type:drupal-core"],
+            "web/libraries/{$name}": ["type:drupal-library"],
+            "web/modules/contrib/{$name}": ["type:drupal-module"],
+            "web/themes/contrib/{$name}": ["type:drupal-theme"],
+            "drush/Commands/contrib/{$name}": ["type:drupal-drush"],
+            "web/modules/custom/{$name}": ["type:drupal-custom-module"],
+            "web/themes/custom/{$name}": ["type:drupal-custom-theme"]
+        },
+        "patches": {}
+    }
+}
+```
+
+The script will automatically detect and use these installer paths when creating patches.
+
 ## ⚠️ Best Practices
 
 - Always review patches before applying
@@ -168,10 +234,23 @@ Ensure your `composer.json` has patch plugin configuration:
 
 ## 🐛 Troubleshooting
 
+### Common Issues
+
+**Package not found error:**
+- Ensure the package is installed via composer
+- Verify the package name is correct (use `composer show` to list packages)
+- Check that composer.json has the correct `installer-paths` configuration for Drupal projects
+
+**Path detection issues:**
+- The script looks for the package's composer.json to determine its type
+- For Drupal, ensure packages have the correct type in their composer.json (drupal-module, drupal-theme, etc.)
+- Check that your root composer.json has `extra.installer-paths` properly configured
+
+**General troubleshooting:**
 - Ensure you're in a git repository
-- Verify all dependencies are installed
+- Verify all dependencies are installed (git, jq, composer)
 - Check file permissions
-- Confirm `composer.json` is present
+- Confirm `composer.json` is present in the current directory
 
 ## 📄 License
 MIT License
