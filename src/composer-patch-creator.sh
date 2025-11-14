@@ -90,6 +90,7 @@ show_help() {
     echo "  -h, --help                  Show this help message"
     echo "  -n, --name <patch_name>     Specify a custom patch name"
     echo "  -m, --message <message>     Specify a patch description message"
+    echo "  -r, --project-relative      Create patch with paths relative to project root (default: vendor-relative)"
     echo
     echo "📝 Description:"
     echo "  → Create a patch file for packages by identifying modified files."
@@ -289,6 +290,7 @@ create_vendor_patch() {
     local vendor_package="$1"
     local patch_name="${2:-}"
     local patch_description="${3:-}"
+    local project_relative="${4:-false}"
     local vendor
     vendor=$(echo "$vendor_package" | cut -d'/' -f1)
     local package
@@ -349,6 +351,14 @@ create_vendor_patch() {
     # Create patch
     log_message "${COLOR_GREEN}" "Creating patch file: ${patch_name}..."
     git diff "$package_path/" > "${patch_path}"
+
+    # Convert to vendor-relative paths unless project-relative flag is set
+    if [[ "$project_relative" != "true" ]]; then
+        log_message "${COLOR_GREEN}" "Converting patch to vendor-relative paths..."
+        # Strip the package path prefix from all file paths in the patch
+        sed -i "s|a/${package_path}/|a/|g; s|b/${package_path}/|b/|g" "${patch_path}"
+    fi
+
     echo -e "✔ Done!"
 
     log_message "${COLOR_GREEN}" "Restoring/Un-staging the modified files..."
@@ -371,6 +381,7 @@ main() {
     local patch_name=""
     local patch_description=""
     local vendor_package=""
+    local project_relative="false"
 
     # Perform dependency checks
     check_dependencies
@@ -391,6 +402,10 @@ main() {
             -m|--message)
                 patch_description="$2"
                 shift 2
+                ;;
+            -r|--project-relative)
+                project_relative="true"
+                shift
                 ;;
             -n=*|--name=*)
                 patch_name="${1#*=}"
@@ -424,7 +439,7 @@ main() {
 
     # Validate and create patch
     validate_input "$vendor_package"
-    create_vendor_patch "$vendor_package" "$patch_name" "$patch_description"
+    create_vendor_patch "$vendor_package" "$patch_name" "$patch_description" "$project_relative"
 }
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
